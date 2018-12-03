@@ -1,0 +1,575 @@
+const Long = require('long');
+const assert = require('assert');
+
+function signed(i, msb=31) {
+    if (i >> msb)
+        return -(((~i >>> 0) & 0xFF) + 1);
+
+    return i;
+}
+
+module.exports = function (MIPS, MipsModule) {
+    let causes = MipsModule.causes = {
+        INT: 0,
+        IBUS: 1,
+        OVF: 2,
+        SYSCALL: 3
+    };
+
+    MipsModule.formats = {
+        R: {
+            decode: function decodeInstruction_R(buf) {
+                let res = {};
+
+                assert(buf.length >= 4, new Error(`Tried to decode an R-format MIPS instruction from a ${buf.length * 8} bit buffer; at least 32 bits are required!`));
+
+                let juice = buf.readUInt32BE();
+                let c = 32;
+                res.opcode = juice >>> (c -= 6);
+                res.rs = juice >>> (c -= 5) & 0x1F;
+                res.rt = juice >>> (c -= 5) & 0x1F;
+                res.rd = juice >>> (c -= 5) & 0x1F;
+                res.shift = juice >>> (c -= 5) & 0x1F;
+                res.funct = juice >>> (c -= 6) & 0x3F;
+
+                return res;
+            },
+
+            isValid: function isValidInstruction_R(ins) {
+                return [ins.opcode, ins.rs, ins.rt, ins.rd, ins.shift, ins.funct].every((v) => v != null);
+            },
+
+            encode: function encodeInstruction_R(ins) {
+                let res = Buffer.alloc(32);
+
+                let ri = 0;
+                let c = 32;
+                ri |= (ins.opcode << (c -= 6)) >>> 0;
+                ri |= (ins.rs << (c -= 5)) >>> 0;
+                ri |= (ins.rt << (c -= 5)) >>> 0;
+                ri |= (ins.rd << (c -= 5)) >>> 0;
+                ri |= (ins.shift << (c -= 5)) >>> 0;
+                ri |= (ins.funct << (c -= 6)) >>> 0;
+
+                res.writeUInt32BE(ri >>> 0);
+                return res;
+            }
+        },
+
+        I: {
+            decode: function decodeInstruction_I(buf) {
+                let res = {};
+
+                assert(buf.length >= 4, new Error(`Tried to decode an I-format MIPS instruction from a ${buf.length * 8} bit buffer; at least 32 bits are required!`));
+
+                let juice = buf.readUInt32BE();
+                let c = 32;
+                res.opcode = juice >>> (c -= 6);
+                res.rs = juice >>> (c -= 5) & 0x1F;
+                res.rt = juice >>> (c -= 5) & 0x1F;
+                res.imm = juice >>> (c -= 16) & 0xFFFF;
+
+                return res;
+            },
+
+            isValid: function isValidInstruction_I(ins) {
+                return [ins.opcode, ins.rs, ins.rt, ins.imm].every((v) => v != null);
+            },
+
+            encode: function encodeInstruction_I(ins) {
+                let res = Buffer.alloc(32);
+
+                let ri = 0;
+                let c = 32;
+                ri |= (ins.opcode << (c -= 6)) >>> 0;
+                ri |= (ins.rs << (c -= 5)) >>> 0;
+                ri |= (ins.rt << (c -= 5)) >>> 0;
+                ri |= (ins.imm << (c -= 16)) >>> 0;
+
+                res.writeUInt32BE(ri >>> 0);
+                return res;
+            }
+        },
+
+        J: {
+            decode: function decodeInstruction_J(buf) {
+                let res = {};
+
+                assert(buf.length >= 4, new Error(`Tried to decode a J-format MIPS instruction from a ${buf.length * 8} bit buffer; at least 32 bits are required!`));
+
+                let juice = buf.readUInt32BE();
+                let c = 32;
+                res.opcode = juice >>> (c -= 6);
+                res.addr = juice >>> (c -= 26) & 0x3FFFFFF;
+
+                return res;
+            }
+        },
+
+        isValid: function isValidInstruction_J(ins) {
+            return [ins.opcode, ins.addr].every((v) => v != null);
+        },
+
+        encode: function encodeInstruction_R(ins) {
+            let res = Buffer.alloc(32);
+
+            let ri = 0;
+            ri |= (ins.opcode << (32 - 6)) >>> 0;
+            ri |= ins.addr >>> 0;
+
+            res.writeUInt32BE(ri >>> 0);
+            return res;
+        }
+    };
+
+    MipsModule.handleException = function handleMIPSException(cause, source) {
+        console.warn(`Warning: MIPS exception 0x${cause.toString(16)} (${['INT', 'IBUS', 'OVF', 'SYSCALL'][cause]}) detected when running instruction: ${source}`);
+
+        this.specialRegisters.Cause = cause;
+        this.specialRegisters.EPC = this.specialRegisters.PC;
+        this.specialRegisters.PC = 0x80000180;
+    };
+
+    MipsModule.opcodes = {};
+
+    // -- Arithmetic ALU Opcodes (R Mode) --
+    MipsModule.opcodes[0b010000] = { // coprocessing (ignore)
+        type: 'R',
+        execute: function() {
+            console.warn('WARNING: Coprocessors aren\'t supported by nodemips.');
+            return;
+        }
+    };
+
+    MipsModule.opcodes[0b000000] = { // everything else >_>
+        type: 'R',
+        execute: function(instr) {
+            let operands = { s: this.registers.get(instr.rs), t: this.registers.get(instr.rt) };
+            let res;
+            let cause = causes.OVF; // default
+            let err = false;
+
+            console.log(((instr.funct & 0x3E) === 0xC ? 'true' : 'false'), instr.funct & 0x8, instr.funct & 0x20);
+
+            if ((instr.funct & 0x3E) === 0xC) { // BREAK/SYSCALL
+                if (!(instr.funct & 1)) this.specialRegisters.Cause = causes.SYSCALL;
+
+                this.specialRegisters.EPC = this.specialRegisters.PC;
+                this.specialRegisters.PC = 0x3C;
+                return;
+            }
+
+            else if (instr.funct & 0x8 && !(instr.funct & 0x20)) {
+                if (instr.funct & 0x1) // JALR
+                    this.registers.set(instr.rd, this.specialRegisters.PC);
+
+                this.specialRegisters.PC = operands.s; // JR
+                return;
+            }
+
+            else if (instr.funct & 0x10) { // MT* (move to *) instructions
+                if (instr.funct & 0x2) // MTLO
+                    this.specialRegisters.LO = operands.s;
+                    
+                else // MTHI
+                    this.specialRegisters.HI = operands.s;
+
+                this.specialRegisters.PC += 4;
+                return;
+            }
+
+            else {
+                if (operands.s === 0 && operands.t === 0) { // MF* (move from *) instructions
+                    if (instr.funct & 0x2) // MFLO
+                        res = this.specialRegisters.LO;
+                        
+                    else // MFHI
+                        res = this.specialRegisters.HI;
+                }
+
+                else if (instr.shift != 0 && (instr.funct & 0x3) !== 0x1) {
+                    let subop = instr.funct & 0x3;
+
+                    let subops = [
+                        (a) => a << instr.shift,
+                        null, // probably some random MIPS instruction entanglement *shrugs*
+                        (a) => a >>> instr.shift,
+                        (a) => a >> instr.shift,
+                    ];
+                    
+                    res = subops[subop](operands.t);
+                }
+
+                else if (instr.funct & 0x20) {
+                    if (instr.funct & 0x8) {
+                        if (!(instr.funct & 0x1)) {
+                            operands.s = signed(operands.s);
+                            operands.t = signed(operands.t);
+                        }
+
+                        res = +(operands.s < operands.t);
+                    }
+
+                    else {
+                        if (instr.funct & 0x4) {
+                            let subop = instr.funct & 0x3;
+
+                            let subops = [
+                                (a, b) => a & b,
+                                (a, b) => a | b,
+                                (a, b) => (a ^ b) & 0xFFFFFFFF,
+                                (a, b) => ~(a | b) & 0xFFFFFFFF
+                            ];
+
+                            res = subops[subop](operands.s, operands.t);
+                        }
+
+                        else {
+                            if (instr.funct & 0x2)
+                                res = operands.s - operands.t;
+                                
+                            else
+                                res = operands.s + operands.t;
+
+                            if (!(instr.funct & 1) && (res < 0 || res > 0xFFFFFFFF))
+                                err = true;
+                        }
+                    }
+                }
+                
+                else if (instr.funct & 0xF) {
+                    if (!(instr.funct & 0x1)) {
+                        operands.s = signed(operands.s);
+                        operands.t = signed(operands.t);
+                    }
+
+                    if (instr.funct & 0x2) {
+                        if (operands.t === 0) {
+                            err = true; // division by zero
+                        }
+
+                        else {
+                            res = this.specialRegisters.HI = Math.floor(operands.s / operands.t);
+                            this.specialRegisters.LO = operands.s - operands.t - Math.floor(operands.s / operands.t);
+                        }
+                    }
+                        
+                    else {
+                        let dwordRes = new Long(operands.s).mul(new Long(operands.t));
+                        this.specialRegisters.HI = dwordRes.high >>> 0;
+                        this.specialRegisters.LO = res = dwordRes.low >>> 0;
+                    }
+                }
+
+                else if (instr.funct & 0x4) {
+                    let subop = instr.funct & 0x3;
+
+                    let subops = [
+                        (a, b) => a << b,
+                        null, // more entanglement! yay!
+                        (a, b) => a >>> b,
+                        (a, b) => a >> b,
+                    ];
+                    
+                    res = subops[subop](operands.t, operands.s);
+                }
+
+                if (!err) {
+                    this.registers.set(instr.rd, res);
+                    this.specialRegisters.PC += 4;
+                }
+
+                else MipsModule.handleException.bind(this)(cause, JSON.stringify(instr));
+            }
+        },
+    };
+
+    // -- Immediate Opcodes (I Mode) --
+    MipsModule.opcodes[0b001000] = { // ADDI
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm };
+            let res;
+
+            res = signed(operands.s) + signed(operands.i);
+            
+            this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };  
+
+    MipsModule.opcodes[0b001001] = { // ADDIU
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm };
+            let res;
+
+            res = operands.s + operands.i;
+
+            this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };  
+
+    MipsModule.opcodes[0b001100] = { // ANDI
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm };
+            let res;
+
+            res = operands.s & operands.i;
+
+            this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };  
+
+    MipsModule.opcodes[0b001111] = { // LUI
+        type: 'I',
+        execute: function (instr) {
+            let operands = { i: instr.imm };
+            let res;
+
+            res = operands.i << 16;
+
+            this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b001111] = { // ORI
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm };
+            let res;
+
+            res = operands.s | operands.i;
+
+            this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b001010] = { // SLTI
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm };
+            let res;
+
+            res = +(operands.s < signed(operands.i));
+
+            this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b001011] = { // SLTIU
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm };
+            let res;
+
+            res = +(operands.s < operands.i);
+
+            this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b001110] = { // XORI
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm };
+            let res;
+
+            res = +(operands.s ^ operands.i);
+
+            this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b000100] = { // BEQ
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), t: this.registers.get(instr.rt), i: instr.imm };
+
+            if (operands.s === operands.t)
+                this.specialRegisters.PC += 4 * operands.i;
+
+            else
+                this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b000001] = { // BG[E]Z[AL]
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), t: this.registers.get(instr.rt), i: instr.imm };
+
+            if (operands.r & 0x10)
+                this.registers.set(31, this.specialRegisters.PC);
+
+            if (operands.r & 0x1 ? operands.s >= 0 : operands.s < 0)
+                this.specialRegisters.PC += 4 * operands.i;
+
+            else
+                this.specialRegisters.PC += 4;
+        }
+    };
+    
+    MipsModule.opcodes[0b000111] = { // BGTZ
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), t: this.registers.get(instr.rt), i: instr.imm };
+
+            if (operands.s > 0)
+                this.specialRegisters.PC += 4 * operands.i;            
+
+            else
+                this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b000110] = { // BLEZ
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), t: this.registers.get(instr.rt), i: instr.imm };
+
+            if (operands.s <= 0)
+                this.specialRegisters.PC += 4 * operands.i;            
+
+            else
+                this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b000101] = { // BNE
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), t: this.registers.get(instr.rt), i: instr.imm };
+
+            if (operands.s != operands.t)
+                this.specialRegisters.PC += 4 * operands.i;            
+
+            else
+                this.specialRegisters.PC += 4;
+        }
+    };
+
+    // * RAM memory manipulation
+    MipsModule.opcodes[0b100000] = { // LB
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm };
+            let res = this.RAM.readInt8(operands.s + operands.i);
+
+            this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b100100] = { // LBU
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm };
+            let res = this.RAM.readUInt8(operands.s + operands.i);
+
+            this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b100001] = { // LH
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm };
+            let res = this.RAM.readInt16LE(operands.s + operands.i);
+
+            this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b100101] = { // LHU
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm };
+            let res = this.RAM.readUInt16LE(operands.s + operands.i);
+
+            this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b100011] = { // LW
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm };
+            let res = this.RAM.readInt32LE(operands.s + operands.i);
+
+            this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b101000] = { // SB
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm, t: this.registers.get(instr.rt) };
+            this.RAM.writeUInt8(operands.s + operands.i, operands.t & 0xFF);
+
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b101000] = { // SH
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm, t: this.registers.get(instr.rt) };
+            this.RAM.writeUInt16LE(operands.s + operands.i, operands.t & 0xFFFF);
+
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b101000] = { // SW
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm, t: this.registers.get(instr.rt) };
+            this.RAM.writeUInt32LE(operands.s + operands.i, operands.t);
+
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    // -- Jump Opcodes (J Mode) --
+    MipsModule.opcodes[0b000010] = { // J (aka JMP)
+        type: 'J',
+        execute: function(instr) {
+            this.specialRegisters.PC = (this.specialRegisters.PC & 0xFC000000) | (instr.addr << 2);
+        }
+    };
+
+    MipsModule.opcodes[0b000010] = { // JAL
+        type: 'JAL',
+        execute: function(instr) {
+            this.registers.set(31, this.specialRegisters.PC);
+            this.specialRegisters.PC = (this.specialRegisters.PC & 0xFC000000) | (instr.addr << 2);
+        }
+    };
+  
+    // ===========================
+
+    MipsModule.clock = function(instruction) {
+        let opcode = instruction >> 26;
+        let opcdesc;
+
+        if ((opcdesc = MipsModule.opcodes[opcode]) === undefined)
+            MipsModule.handleException.bind(this)(causes.IBUS, instruction);
+
+        let buf = Buffer.alloc(4);
+        buf.writeUInt32BE(instruction);
+        opcdesc.execute.bind(this)(MipsModule.formats[opcdesc.type].decode(buf));
+    };
+};

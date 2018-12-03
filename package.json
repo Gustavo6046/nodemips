@@ -1,0 +1,29 @@
+{
+  "name": "nodemips",
+  "version": "0.1.0",
+  "description": "MIPS data emulation and manipulation within Node.JS",
+  "main": "index.js",
+  "keywords": [
+    "mips",
+    "data",
+    "computer",
+    "emulator",
+    "emulation",
+    "manipulation"
+  ],
+  "devDependencies": {
+    "@babel/cli": "^7.1.5",
+    "@babel/core": "^7.1.6",
+    "@babel/preset-env": "^7.1.6",
+    "browserify": "^16.2.3"
+  },
+  "author": "Gustavo R. Rehermann (Gustavo6046)",
+  "license": "MIT",
+  "scripts": {
+    "test": "node test.js",
+    "build": "browserify -r ./index.js:mips | babel --minified -f minif.tmp | uglifyjs >browser/mips.js"
+  },
+  "dependencies": {
+    "long": "^4.0.0"
+  }
+}
