@@ -6,6 +6,7 @@ const numClocks = 12;
 function printDebugStatus() {
     console.log('Registers:', JSON.stringify(machine.registers._internal));
     console.log('Special Registers:', JSON.stringify(machine.specialRegisters));
+    console.log('Error mode:', machine.errorInstructions);
     console.log();
 }
 
@@ -58,9 +59,9 @@ for (let clock = 1; clock <= numClocks; clock++) {
     console.log(`> Instruction (raw): ${machine.RAM.slice((clock - 1) * 4, clock * 4).toString('hex').toUpperCase()}`);
     let opcode = instruction >> 26;
     console.log(`> Instruction (opc.only): ${new Array(6 - opcode.toString(2).length).fill('0').join('')}${opcode.toString(2)}`);
-
+    
     let opcdesc = MIPS.instructions.opcodes[opcode];
-
+    
     if (opcdesc !== undefined) {
         let buf = Buffer.alloc(4);
         buf.writeUInt32BE(instruction);
