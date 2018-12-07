@@ -125,9 +125,12 @@ module.exports = function (MIPS, MipsModule) {
     MipsModule.handleException = function handleMIPSException(cause, source) {
         console.warn(`Warning: MIPS exception 0x${cause.toString(16)} (${['INT', 'IBUS', 'OVF', 'SYSCALL'][cause]}) detected when running instruction: ${source}`);
 
-        this.specialRegisters.Cause = cause;
+        this.specialRegisters.Cause = cause << 2;
+        this.specialRegisters.Cause |= this.getInterruptStateBitField() << 9;
+
         this.specialRegisters.EPC = this.specialRegisters.PC;
-        this.specialRegisters.PC = 0x80000180;
+        this.specialRegisters.PC = 0x00000180;
+        this.errorInstructions = true;
     };
 
     MipsModule.opcodes = {};
@@ -149,8 +152,6 @@ module.exports = function (MIPS, MipsModule) {
             let cause = causes.OVF; // default
             let err = false;
 
-            console.log(((instr.funct & 0x3E) === 0xC ? 'true' : 'false'), instr.funct & 0x8, instr.funct & 0x20);
-
             if ((instr.funct & 0x3E) === 0xC) { // BREAK/SYSCALL
                 if (!(instr.funct & 1)) this.specialRegisters.Cause = causes.SYSCALL;
 
@@ -159,7 +160,7 @@ module.exports = function (MIPS, MipsModule) {
                 return;
             }
 
-            else if (instr.funct & 0x8 && !(instr.funct & 0x20)) {
+            else if (instr.funct & 0x8 && !(instr.funct & 0x2F)) {
                 if (instr.funct & 0x1) // JALR
                     this.registers.set(instr.rd, this.specialRegisters.PC);
 
@@ -167,19 +168,19 @@ module.exports = function (MIPS, MipsModule) {
                 return;
             }
 
-            else if (instr.funct & 0x10) { // MT* (move to *) instructions
+            else if (instr.funct & 0x10 && !(instr.funct & 0xF) && operands.s !== 0 && operands.t !== 0) { // MT* (move to *) instructions
                 if (instr.funct & 0x2) // MTLO
-                    this.specialRegisters.LO = operands.s;
-                    
+                this.specialRegisters.LO = operands.s;
+                
                 else // MTHI
-                    this.specialRegisters.HI = operands.s;
+                this.specialRegisters.HI = operands.s;
 
                 this.specialRegisters.PC += 4;
                 return;
             }
-
+            
             else {
-                if (operands.s === 0 && operands.t === 0) { // MF* (move from *) instructions
+                if (instr.rs === 0 && instr.rt === 0) { // MF* (move from *) instructions
                     if (instr.funct & 0x2) // MFLO
                         res = this.specialRegisters.LO;
                         
@@ -250,7 +251,7 @@ module.exports = function (MIPS, MipsModule) {
 
                         else {
                             res = this.specialRegisters.HI = Math.floor(operands.s / operands.t);
-                            this.specialRegisters.LO = operands.s - operands.t - Math.floor(operands.s / operands.t);
+                            this.specialRegisters.LO = operands.s - operands.t * Math.floor(operands.s / operands.t);
                         }
                     }
                         
@@ -258,6 +259,11 @@ module.exports = function (MIPS, MipsModule) {
                         let dwordRes = new Long(operands.s).mul(new Long(operands.t));
                         this.specialRegisters.HI = dwordRes.high >>> 0;
                         this.specialRegisters.LO = res = dwordRes.low >>> 0;
+                    }
+
+                    if (!err) {
+                        this.specialRegisters.PC += 4;
+                        return;
                     }
                 }
 
@@ -462,7 +468,8 @@ module.exports = function (MIPS, MipsModule) {
         type: 'I',
         execute: function (instr) {
             let operands = { s: this.registers.get(instr.rs), i: instr.imm };
-            let res = this.RAM.readInt8(operands.s + operands.i);
+            let vis = this.visibleRAM(operands.s + operands.i);
+            let res = vis.space.readInt8(vis.newAddr);
 
             this.registers.set(instr.rt, res);
             this.specialRegisters.PC += 4;
@@ -473,7 +480,8 @@ module.exports = function (MIPS, MipsModule) {
         type: 'I',
         execute: function (instr) {
             let operands = { s: this.registers.get(instr.rs), i: instr.imm };
-            let res = this.RAM.readUInt8(operands.s + operands.i);
+            let vis = this.visibleRAM(operands.s + operands.i);
+            let res = vis.space.readUInt8(vis.newAddr);
 
             this.registers.set(instr.rt, res);
             this.specialRegisters.PC += 4;
@@ -484,7 +492,8 @@ module.exports = function (MIPS, MipsModule) {
         type: 'I',
         execute: function (instr) {
             let operands = { s: this.registers.get(instr.rs), i: instr.imm };
-            let res = this.RAM.readInt16LE(operands.s + operands.i);
+            let vis = this.visibleRAM(operands.s + operands.i);
+            let res = vis.space.readInt16LE(vis.newAddr);
 
             this.registers.set(instr.rt, res);
             this.specialRegisters.PC += 4;
@@ -495,7 +504,8 @@ module.exports = function (MIPS, MipsModule) {
         type: 'I',
         execute: function (instr) {
             let operands = { s: this.registers.get(instr.rs), i: instr.imm };
-            let res = this.RAM.readUInt16LE(operands.s + operands.i);
+            let vis = this.visibleRAM(operands.s + operands.i);
+            let res = vis.space.readUInt16(vis.newAddr);
 
             this.registers.set(instr.rt, res);
             this.specialRegisters.PC += 4;
@@ -506,7 +516,20 @@ module.exports = function (MIPS, MipsModule) {
         type: 'I',
         execute: function (instr) {
             let operands = { s: this.registers.get(instr.rs), i: instr.imm };
-            let res = this.RAM.readInt32LE(operands.s + operands.i);
+            let vis = this.visibleRAM(operands.s + operands.i);
+            let res = vis.space.readInt32LE(vis.newAddr);
+
+            this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b100111] = { // LWU
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm };
+            let vis = this.visibleRAM(operands.s + operands.i);
+            let res = vis.space.readUInt32LE(vis.newAddr);
 
             this.registers.set(instr.rt, res);
             this.specialRegisters.PC += 4;
@@ -517,27 +540,63 @@ module.exports = function (MIPS, MipsModule) {
         type: 'I',
         execute: function (instr) {
             let operands = { s: this.registers.get(instr.rs), i: instr.imm, t: this.registers.get(instr.rt) };
-            this.RAM.writeUInt8(operands.s + operands.i, operands.t & 0xFF);
+            let vis = this.visibleRAM(operands.s + operands.i);
+            vis.space.writeInt8(vis.newAddr, operands.t & 0xFF);
 
             this.specialRegisters.PC += 4;
         }
     };
 
-    MipsModule.opcodes[0b101000] = { // SH
+    MipsModule.opcodes[0b101001] = { // SH
         type: 'I',
         execute: function (instr) {
             let operands = { s: this.registers.get(instr.rs), i: instr.imm, t: this.registers.get(instr.rt) };
-            this.RAM.writeUInt16LE(operands.s + operands.i, operands.t & 0xFFFF);
+            let vis = this.visibleRAM(operands.s + operands.i);
+            vis.space.writeInt16LE(vis.newAddr, operands.t & 0xFF);
 
             this.specialRegisters.PC += 4;
         }
     };
 
-    MipsModule.opcodes[0b101000] = { // SW
+    MipsModule.opcodes[0b101011] = { // SW
         type: 'I',
         execute: function (instr) {
             let operands = { s: this.registers.get(instr.rs), i: instr.imm, t: this.registers.get(instr.rt) };
-            this.RAM.writeUInt32LE(operands.s + operands.i, operands.t);
+            let vis = this.visibleRAM(operands.s + operands.i);
+            vis.space.writeInt32LE(vis.newAddr, operands.t & 0xFF);
+
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b101100] = { // SBU
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm, t: this.registers.get(instr.rt) };
+            let vis = this.visibleRAM(operands.s + operands.i);
+            vis.space.writeUInt8(vis.newAddr, operands.t & 0xFF);
+
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b101101] = { // SHU
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm, t: this.registers.get(instr.rt) };
+            let vis = this.visibleRAM(operands.s + operands.i);
+            vis.space.writeUInt16LE(vis.newAddr, operands.t & 0xFF);
+
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b101111] = { // SWU
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm, t: this.registers.get(instr.rt) };
+            let vis = this.visibleRAM(operands.s + operands.i);
+            vis.space.writeUInt32LE(vis.newAddr, operands.t & 0xFF);
 
             this.specialRegisters.PC += 4;
         }

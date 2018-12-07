@@ -13,10 +13,10 @@ module.exports = function (MIPS, MipsModule) {
             },
             
             get: (registerIndex) => {
-                if (registerIndex != 0)
-                    return words[registerIndex];
-
-                return 0;
+                if (registerIndex == 0)
+                    return 0;
+                
+                return words[registerIndex];
             }
         };
     };
