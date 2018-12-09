@@ -1,6 +1,6 @@
 module.exports = function (MIPS, MipsModule) {
     MipsModule.MIPSMachine = class MIPSMachine {
-        constructor(specialRegisters = {}, allocRam = 0x0FFFFFFF, allocText = 0xF053700, registers = null, autoAllocate = true, errorInstructions = false) {
+        constructor(specialRegisters = {}, allocRam = 0x200000, allocText = 0x1000000, registers = null, autoAllocate = true, errorInstructions = false) {
             this.specialRegisters = {
                 // note: in actual machines, PC is EIGHT PAST the current instruction.
                 // so emulate that behavior properly for instructions that meddle with
@@ -10,14 +10,18 @@ module.exports = function (MIPS, MipsModule) {
                 Cause: specialRegisters.Cause || 0,
                 HI: specialRegisters.HI || 0,
                 LO: specialRegisters.LO || 0,
-                BVR: specialRegisters.BVR || 0
+                BVR: specialRegisters.BVR || 0,
+                Status: specialRegisters.Status != null ? specialRegisters.Status : 0xF
             };
+
+            allocText = Math.ceil(Math.max(allocText, 0) / 0x200000) * 0x200000;
+            allocRam = Math.ceil(Math.max(allocRam, 0) / 0x200000) * 0x200000;
 
             if (autoAllocate) {
                 this.RAM = Buffer.alloc(allocRam);
-                this.text = Buffer.alloc(allocText);
-                this.errorRom = Buffer.alloc(0x1000000);
-                this.stack = Buffer.alloc(0x1000000);
+                this.text = Buffer.alloc(allocText); // 0x800000 bytes per program; must align as a multiple!
+                this.errorRom = Buffer.alloc(0x800000);
+                this.stack = Buffer.alloc(0x800000);
             }
                 
             else {
@@ -68,22 +72,22 @@ module.exports = function (MIPS, MipsModule) {
 
         loadRAMImage(image) {
             this.RAM = Buffer.alloc(this.ramSize); // the old one will be GC-ed... hopefully!
-            image.copy(this.RAM, 0, 0);
+            image.copy(this.RAM);
         }
 
-        loadTextImage(image) {
+        loadTextImage(image, align=0) {
             this.text = Buffer.alloc(this.textSize); // the old one will be GC-ed... hopefully!
-            image.copy(this.text, 0, 0);
+            image.copy(this.text, 0x800000 * align);
         }
 
         loadErrorHandlerImage(image) {
             this.errorRom = Buffer.alloc(0x1000000);
-            image.copy(this.errorRom, 0, 0);
+            image.copy(this.errorRom);
         }
 
         loadStackImage(image) {
             this.stack = Buffer.alloc(0x1000000);
-            image.copy(this.stack, 0, 0);
+            image.copy(this.stack);
         }
 
         clock() {
@@ -138,17 +142,21 @@ module.exports = function (MIPS, MipsModule) {
                     newAddr: readAddr - 0x10000000
                 };
 
-            else if (readADdr >= 0x00400000)
+            else if (readAddr >= 0x00400000)
                 return {
                     space: this.text,
                     newAddr: readAddr - 0x00400000
                 };
 
-            else
+            else {
+                let buf = Buffer.alloc(4);
+                buf.writeUInt32LE(0, 0);
+                
                 return {
-                    space: Buffer.alloc(4).writeUInt32LE(0, 0),
+                    space: buf,
                     newAddr: 0
                 };
+            }
         }
     };
 };

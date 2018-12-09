@@ -19,7 +19,7 @@ module.exports = function (MIPS, MipsModule) {
     MipsModule.formats = {
         R: {
             decode: function decodeInstruction_R(buf) {
-                let res = {};
+                let res = { type: 'R' };
 
                 assert(buf.length >= 4, new Error(`Tried to decode an R-format MIPS instruction from a ${buf.length * 8} bit buffer; at least 32 bits are required!`));
 
@@ -58,7 +58,7 @@ module.exports = function (MIPS, MipsModule) {
 
         I: {
             decode: function decodeInstruction_I(buf) {
-                let res = {};
+                let res = { type: 'I' };
 
                 assert(buf.length >= 4, new Error(`Tried to decode an I-format MIPS instruction from a ${buf.length * 8} bit buffer; at least 32 bits are required!`));
 
@@ -93,7 +93,7 @@ module.exports = function (MIPS, MipsModule) {
 
         J: {
             decode: function decodeInstruction_J(buf) {
-                let res = {};
+                let res = { type: 'J' };
 
                 assert(buf.length >= 4, new Error(`Tried to decode a J-format MIPS instruction from a ${buf.length * 8} bit buffer; at least 32 bits are required!`));
 
@@ -103,23 +103,27 @@ module.exports = function (MIPS, MipsModule) {
                 res.addr = juice >>> (c -= 26) & 0x3FFFFFF;
 
                 return res;
+            },
+
+            isValid: function isValidInstruction_J(ins) {
+                return [ins.opcode, ins.addr].every((v) => v != null);
+            },
+    
+            encode: function encodeInstruction_R(ins) {
+                let res = Buffer.alloc(32);
+    
+                let ri = 0;
+                ri |= (ins.opcode << (32 - 6)) >>> 0;
+                ri |= ins.addr >>> 0;
+    
+                res.writeUInt32BE(ri >>> 0);
+                return res;
             }
         },
+    };
 
-        isValid: function isValidInstruction_J(ins) {
-            return [ins.opcode, ins.addr].every((v) => v != null);
-        },
-
-        encode: function encodeInstruction_R(ins) {
-            let res = Buffer.alloc(32);
-
-            let ri = 0;
-            ri |= (ins.opcode << (32 - 6)) >>> 0;
-            ri |= ins.addr >>> 0;
-
-            res.writeUInt32BE(ri >>> 0);
-            return res;
-        }
+    MipsModule.encode = function encodeInstruction(inst) {
+        return MipsModule.formats[inst.type].encode(inst);
     };
 
     MipsModule.handleException = function handleMIPSException(cause, source) {
@@ -127,9 +131,11 @@ module.exports = function (MIPS, MipsModule) {
 
         this.specialRegisters.Cause = cause << 2;
         this.specialRegisters.Cause |= this.getInterruptStateBitField() << 9;
+        this.specialRegisters.Status <<= 4;
+        this.specialRegisters.Status >>>= 0;
 
         this.specialRegisters.EPC = this.specialRegisters.PC;
-        this.specialRegisters.PC = 0x00000180;
+        this.specialRegisters.PC = 0x17C;
         this.errorInstructions = true;
     };
 
@@ -164,16 +170,16 @@ module.exports = function (MIPS, MipsModule) {
                 if (instr.funct & 0x1) // JALR
                     this.registers.set(instr.rd, this.specialRegisters.PC);
 
-                this.specialRegisters.PC = operands.s; // JR
+                this.specialRegisters.PC = operands.s - 4; // JR
                 return;
             }
 
             else if (instr.funct & 0x10 && !(instr.funct & 0xF) && operands.s !== 0 && operands.t !== 0) { // MT* (move to *) instructions
                 if (instr.funct & 0x2) // MTLO
-                this.specialRegisters.LO = operands.s;
+                    this.specialRegisters.LO = operands.s;
                 
                 else // MTHI
-                this.specialRegisters.HI = operands.s;
+                    this.specialRegisters.HI = operands.s;
 
                 this.specialRegisters.PC += 4;
                 return;
@@ -232,8 +238,13 @@ module.exports = function (MIPS, MipsModule) {
                             else
                                 res = operands.s + operands.t;
 
-                            if (!(instr.funct & 1) && (res < 0 || res > 0xFFFFFFFF))
-                                err = true;
+                            if (!(instr.funct & 1)) {
+                                if ((res < 0 || res > 0xFFFFFFFF))
+                                    err = true;
+
+                                else
+                                    res = res >>> 0;
+                            }
                         }
                     }
                 }
@@ -414,7 +425,7 @@ module.exports = function (MIPS, MipsModule) {
             let operands = { s: this.registers.get(instr.rs), t: this.registers.get(instr.rt), i: instr.imm };
 
             if (operands.r & 0x10)
-                this.registers.set(31, this.specialRegisters.PC);
+                this.registers.set(31, this.specialRegisters.PC + 4);
 
             if (operands.r & 0x1 ? operands.s >= 0 : operands.s < 0)
                 this.specialRegisters.PC += 4 * operands.i;
@@ -472,6 +483,16 @@ module.exports = function (MIPS, MipsModule) {
             let res = vis.space.readInt8(vis.newAddr);
 
             this.registers.set(instr.rt, res);
+            this.specialRegisters.PC += 4;
+        }
+    };
+
+    MipsModule.opcodes[0b111111] = { // PRINT
+        type: 'I',
+        execute: function (instr) {
+            let operands = { s: this.registers.get(instr.rs), i: instr.imm };
+            console.log(operands.s + operands.i);
+            this.registers.set(instr.rt, operands.s + operands.i);
             this.specialRegisters.PC += 4;
         }
     };
@@ -606,22 +627,22 @@ module.exports = function (MIPS, MipsModule) {
     MipsModule.opcodes[0b000010] = { // J (aka JMP)
         type: 'J',
         execute: function(instr) {
-            this.specialRegisters.PC = (this.specialRegisters.PC & 0xFC000000) | (instr.addr << 2);
+            this.specialRegisters.PC = (this.specialRegisters.PC & 0xFC000000) | (instr.addr << 2) - 4;
         }
     };
 
     MipsModule.opcodes[0b000010] = { // JAL
-        type: 'JAL',
+        type: 'J',
         execute: function(instr) {
-            this.registers.set(31, this.specialRegisters.PC);
-            this.specialRegisters.PC = (this.specialRegisters.PC & 0xFC000000) | (instr.addr << 2);
+            this.registers.set(31, this.specialRegisters.PC + 4);
+            this.specialRegisters.PC = (this.specialRegisters.PC & 0xFC000000) | (instr.addr << 2) - 4;
         }
     };
   
     // ===========================
 
     MipsModule.clock = function(instruction) {
-        let opcode = instruction >> 26;
+        let opcode = instruction >>> 26;
         let opcdesc;
 
         if ((opcdesc = MipsModule.opcodes[opcode]) === undefined)
