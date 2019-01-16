@@ -1,7 +1,7 @@
 const MIPS = require('./index.js');
 const fs = require('fs');
 const machine = new MIPS.machine.MIPSMachine();
-const numClocks = 100;
+const numClocks = 2000;
 
 function printDebugStatus() {
     console.log('Registers:', JSON.stringify(machine.registers._internal));
@@ -28,6 +28,16 @@ printDebugStatus();
 console.log();
 console.log();
 
+let stdout = '';
+let prints = 0;
+
+machine.on('stdout', (data) => {
+    prints++;
+    stdout += data;
+});
+
+MIPS.machine.defaultSyscalls.apply(machine);
+
 for (let clock = 1; clock <= numClocks; clock++) {
     let instruction;
 
@@ -37,10 +47,11 @@ for (let clock = 1; clock <= numClocks; clock++) {
     else
         instruction = machine.text.readUInt32BE(machine.specialRegisters.PC);
 
-    console.log(`> Clock #${clock}`);
-    console.log(`> Instruction (raw): ${machine.RAM.slice((clock - 1) * 4, clock * 4).toString('hex').toUpperCase()}`);
+    console.log(`    [ Clock #${clock} ]`);
+    console.log(`> Instruction (hex. raw inst):  ${machine.RAM.slice((clock - 1) * 4, clock * 4).toString('hex').toUpperCase()}`);
     let opcode = instruction >>> 26;
-    console.log(`> Instruction (opc.only): ${new Array(6 - opcode.toString(2).length).fill('0').join('')}${opcode.toString(2)}`);
+    console.log(`> Instruction (bin. opc. only): ${new Array(6 - opcode.toString(2).length).fill('0').join('')}${opcode.toString(2)}`);
+    console.log();
     
     let opcdesc = MIPS.instructions.opcodes[opcode];
     
@@ -55,4 +66,10 @@ for (let clock = 1; clock <= numClocks; clock++) {
 
     machine.clock();
     printDebugStatus();
+
+    if (machine.stopped)
+        break;
 }
+
+console.log(`\n== PRINTED OUTPUT (${prints} syscalls wrote to stdout) ==`);
+console.log(stdout);

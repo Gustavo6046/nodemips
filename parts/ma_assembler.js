@@ -2,12 +2,26 @@ module.exports = function (MIPS, MipsModule) {
     MipsModule.pseudoInstructions = {
         LI: function(args) {
             let imm = +args[1];
-            let iu = imm >>> 16;
-            let lu = imm & 0xFFFF;
 
+            if (imm >>> 16 !== 0) {
+                let low = imm & 0xFFFF;
+                let upp = imm >>> 16;
+
+                return [
+                    `LUI ${args[0]}, ${upp}`,
+                    `ADDI ${args[0]}, ${args[0]}, ${low}`,
+                ];
+            }
+
+            else
+                return [
+                    `ADDI ${args[0]}, $0, ${imm}`,
+                ];
+        },
+
+        JMP: function(args) {
             return [
-                `LUI $at, ${iu}`,
-                `ORI ${args[0]}, $at, ${lu}`
+                `J ${args.join(' ')}`
             ];
         },
 
@@ -21,13 +35,13 @@ module.exports = function (MIPS, MipsModule) {
 
         MOVE: function(args) {
             return [
-                `ADD ${args[0]}, ${args[1]}, $0`
+                `ADD ${args[0]}, $0, ${args[1]}`
             ];
         },
 
         LA: function(args) {
             return [
-                'LUI $at, 4097',
+                'LUI $at, 4096',
                 `ORI ${args[0]}, $at, ${args[1]}`
             ];
         },
@@ -79,14 +93,44 @@ module.exports = function (MIPS, MipsModule) {
         if (a.match(/^d+$/))
             return +a;
 
-        else if (this._labelOffs[a] != null)
-            return (this._labelOffs[a] & 0xFFFFFFFF) >>> 2;
+        else if (this._labelOffs[a] != null) {
+            return ((this._labelOffs[a] & 0xFFFFFFFF) >>> 2) + 1;
+        }
 
         else {
             if (onError != null)
                 onError(new Error('Tried to compile jump statement with no such address or label: ' + a));
 
             return 0;
+        }
+    };
+
+    MipsModule.parseRegisterOrData = function (assembler, r, onError) {
+        if (!r.startsWith('$')) { // dammit! (also, please, PLEASE, don't use data labels that begin with '$'!)
+            if (assembler.data[r] != null) {
+                return assembler.data[r].offset;
+            }
+
+            else
+                return 0; // double dammit!
+        }
+
+        else {
+            let rn = r.slice(1);
+
+            if (r.match(/^\$\d+$/))
+                return +(r.slice(1));
+
+            if (!rn.match(/^\d+$/)) {
+                if (MipsModule.registerNames[rn] == null) {
+                    if (onError != null)
+                        onError(new Error('Tried to compile invalid register argument: ' + r));
+
+                    return 0;
+                } else
+                    return MipsModule.registerNames[rn];
+            } else
+                return Math.floor(+rn);
         }
     };
 
@@ -241,28 +285,40 @@ module.exports = function (MIPS, MipsModule) {
     }
 
     function _I(name, opc, args, onError) {
-        let m = /^\d+\((\$[a-zA-Z0-9]+?)\)$/.exec(args[1]);
+        let m = /^(\d+)\((\$?[a-zA-Z0-9]+?)\)$/.exec(args[1]);
 
-        if (m != null)
+        if (m != null) {
             return {
                 name: name,
                 type: 'I',
                 opcode: opc,
 
-                rt: MipsModule.parseRegister(args[0], onError),
-                rs: MipsModule.parseRegister(m[1], onError),
-                imm: +m[0],
+                rt: MipsModule.parseRegisterOrData(this, args[0], onError),
+                rs: MipsModule.parseRegisterOrData(this, m[2], onError),
+                imm: +m[1],
+            };
+        }
+
+        else if (args.length > 2)
+            return {
+                name: name,
+                type: 'I',
+                opcode: opc,
+
+                rt: MipsModule.parseRegisterOrData(this, args[0], onError),
+                rs: MipsModule.parseRegisterOrData(this, args[1], onError),
+                imm: +args[2],
             };
 
-        else
+        else    
             return {
                 name: name,
                 type: 'I',
                 opcode: opc,
 
-                rt: MipsModule.parseRegister(args[1], onError),
-                rs: MipsModule.parseRegister(args[0], onError),
-                imm: +args[2],
+                rt: MipsModule.parseRegisterOrData(this, args[0], onError),
+                rs: MipsModule.parseRegisterOrData(this, args[1], onError),
+                imm: 0,
             };
     }
 
@@ -276,8 +332,8 @@ module.exports = function (MIPS, MipsModule) {
                 opcode: opc,
 
                 rt: rt,
-                rs: MipsModule.parseRegister(m[1], onError),
-                imm: +m[0],
+                rs: MipsModule.parseRegisterOrData(this, m[2], onError),
+                imm: +m[1],
             };
 
         else
@@ -287,8 +343,34 @@ module.exports = function (MIPS, MipsModule) {
                 opcode: opc,
 
                 rt: rt,
-                rs: MipsModule.parseRegister(args[0], onError),
-                imm: +args[2],
+                rs: MipsModule.parseRegisterOrData(this, args[0], onError),
+                imm: +args[1],
+            };
+    }
+
+    function _Irs(name, opc, args, rs, onError) { // bastard I opcodes with fixed rs
+        let m = /^\d+\((\$[a-zA-Z0-9]+?)\)$/.exec(args[1]);
+
+        if (m != null)
+            return {
+                name: name,
+                type: 'I',
+                opcode: opc,
+
+                rt: MipsModule.parseRegisterOrData(this, m[2], onError),
+                rs: rs,
+                imm: +m[1],
+            };
+
+        else
+            return {
+                name: name,
+                type: 'I',
+                opcode: opc,
+
+                rt: MipsModule.parseRegisterOrData(this, args[0], onError),
+                rs: rs,
+                imm: +args[1],
             };
     }
 
@@ -303,9 +385,6 @@ module.exports = function (MIPS, MipsModule) {
 
     MipsModule.lines = function (thisArg) { // reference: https://opencores.org/project/plasma/opcodes
         return {
-            // Miscellaneous
-            PRINT: _I.bind(thisArg, 'PRINT', 0b111111),
-
             // Arithmetic Logic Unit
             ADD: _R.bind(thisArg, 'ADD', 0, 0x20),
             ADDI: _I.bind(thisArg, 'ADDI', 0b1000),
@@ -315,7 +394,7 @@ module.exports = function (MIPS, MipsModule) {
             AND: _R.bind(thisArg, 'AND', 0, 0x24),
             ANDI: _I.bind(thisArg, 'ANDI', 0b1100),
 
-            LUI: _I.bind(thisArg, 'LUI', 0b1111),
+            LUI: _Irs.bind(thisArg, 'LUI', 0b1111),
 
             NOR: _R.bind(thisArg, 'NOR', 0, 0b100111),
             OR: _R.bind(thisArg, 'OR', 0, 0b100101),
@@ -360,7 +439,7 @@ module.exports = function (MIPS, MipsModule) {
             BLEZ: _Irt.bind(thisArg, 'BLEZ', 0b110, 0),
             BLTZ: _Irt.bind(thisArg, 'BLTZ', 0b1, 0),
             BLTZAL: _Irt.bind(thisArg, 'BLTZAL', 0b1, 0b10000),
-            BNE: _I.bind(thisArg, 'BNE', 0b101),
+            BNE: _I.bind(thisArg, 'BNE', 0b000101),
 
             BREAK: _BREAK,
 
@@ -395,15 +474,42 @@ module.exports = function (MIPS, MipsModule) {
         };
     };
 
+    MipsModule.parseLine = function (l) {
+        l = l.replace(/^\s+|\s+$|#.+$/g, '');
+
+        if (l == '') return '';
+
+        let ops = [l];
+        let newOps = [];
+
+        ops.forEach((il) => {
+            let op = il.split(' ')[0].toUpperCase(); 
+            let args = il.split(' ').slice(1).join(' ').replace(/\s+/g, '').split(',');
+
+            if (op in MipsModule.pseudoInstructions) {
+                newOps = newOps.concat(MipsModule.pseudoInstructions[op](args));
+                return true;
+            }
+
+            else {
+                newOps.push(`${op} ${args.join(',')}`);
+                return false;
+            }
+        });
+
+        return newOps;
+    };
+
     MipsModule.compileLine = function (l, onError) {
         l = l.replace(/^\s+|\s+$|#.+$/g, '');
 
-        if (l == '') return;
+        if (l == '') return null;
 
         let op = l.split(' ')[0].toUpperCase();
         let args = l.split(' ').slice(1).join(' ').replace(/\s+/g, '').split(',');
 
         if (this && typeof this._iPointer === 'number') this._iPointer += 4;
+
         let i = MipsModule.lines(this)[op](args, onError);
 
         return i;
@@ -425,20 +531,22 @@ module.exports = function (MIPS, MipsModule) {
             _dPointer: 0,
 
             setSectionOffset: function (sect, offs) {
-                res._labelOffs[sect] = offs * 4;
+                res._labelOffs[sect] = offs << 2;
+                console.log(sect, offs);
             },
 
             compileSection: function (sect, lines, onError) {
                 if (typeof lines === 'string')
-                    lines = lines.split('\n');
+                    lines = lines.split('\n').filter((l) => !l.filter(/^\s*/));
 
                 this._iPointer = this._iPointer + 4 - (this._iPointer % 4);
 
+                lines = [].concat(...lines.map((l) => MipsModule.parseLine(l)));
                 lines = lines.map((l) => MipsModule.compileLine.bind(res)(l, onError));
+                
                 if (sect == null) res.begin = lines;
 
                 else {
-                    res._labelOffs[sect] = this._iPointer;
                     res.labels[sect] = {
                         offset: this._iPointer,
                         instructions: lines
@@ -487,9 +595,16 @@ module.exports = function (MIPS, MipsModule) {
 
                 let amode = 'TEXT';
 
+                lines = lines.filter((l) => {
+                    l = l.replace(/^\s+|\s*#.*$|\s+$/g, '');
+
+                    return l != '';
+                });
+
+                let offs = 0;
+
                 lines.forEach((l) => { // first pass (offset calculation)
                     l = l.replace(/^\s+|\s+$|#.+$/, '');
-                    if (l == '') return;
 
                     if (l[0] === '.') {
                         let directive = l.slice(1).toUpperCase().split(' ');
@@ -498,10 +613,11 @@ module.exports = function (MIPS, MipsModule) {
                         let m = l.match(/^\.([a-zA-Z_-]+):$/);
 
                         if (mode === 'TEXT' && m) {
-                            if (sectionName != null)
-                                res.setSectionOffset(sectionName, section.length);
-                                
+                            offs += section.length;
                             sectionName = m[1];
+                            res.setSectionOffset(sectionName, offs);
+
+                            section = [];
                         }
 
                         else if (directive[0].toUpperCase() === 'DATA')
@@ -526,15 +642,11 @@ module.exports = function (MIPS, MipsModule) {
                         }
                     }
                 });
-
-                if (sectionName != null)
-                    res.setSectionOffset(sectionName, section.length);
                     
                 section = [];
 
-                lines.forEach((l) => {
+                lines.forEach((l) => { // second pass (parsing and compiling directives and instructions)
                     l = l.replace(/^\s+|\s+$|#.+$/, '');
-                    if (l == '') return;
 
                     if (l[0] === '.') {
                         let ln = l.slice(1).replace(/\s+$/, '');

@@ -158,19 +158,25 @@ module.exports = function (MIPS, MipsModule) {
             let cause = causes.OVF; // default
             let err = false;
 
-            if ((instr.funct & 0x3E) === 0xC) { // BREAK/SYSCALL
-                if (!(instr.funct & 1)) this.specialRegisters.Cause = causes.SYSCALL;
-
+            if (instr.funct === 0b001101) { // BREAK
                 this.specialRegisters.EPC = this.specialRegisters.PC;
                 this.specialRegisters.PC = 0x3C;
                 return;
             }
 
-            else if (instr.funct & 0x8 && !(instr.funct & 0x2F)) {
+            else if (instr.funct === 0b001100) { // SYSCALL
+                this.cause = causes.SYSCALL;
+                this.emitSyscall(this.registers.get(2), this.registers.get(4), this.registers.get(5), this.registers.get(6), this.registers.get(7));
+                
+                this.specialRegisters.PC += 4;
+                return;
+            }
+
+            else if (instr.funct & 0x8 && !(instr.funct & 0x2F)) { // JR/JALR
                 if (instr.funct & 0x1) // JALR
                     this.registers.set(instr.rd, this.specialRegisters.PC);
 
-                this.specialRegisters.PC = operands.s - 4; // JR
+                this.specialRegisters.PC = operands.s - 4;
                 return;
             }
 
@@ -354,7 +360,7 @@ module.exports = function (MIPS, MipsModule) {
         }
     };
 
-    MipsModule.opcodes[0b001111] = { // ORI
+    MipsModule.opcodes[0b001101] = { // ORI
         type: 'I',
         execute: function (instr) {
             let operands = { s: this.registers.get(instr.rs), i: instr.imm };
@@ -487,6 +493,7 @@ module.exports = function (MIPS, MipsModule) {
         }
     };
 
+    /*
     MipsModule.opcodes[0b111111] = { // PRINT
         type: 'I',
         execute: function (instr) {
@@ -496,6 +503,7 @@ module.exports = function (MIPS, MipsModule) {
             this.specialRegisters.PC += 4;
         }
     };
+    */
 
     MipsModule.opcodes[0b100100] = { // LBU
         type: 'I',
@@ -627,7 +635,8 @@ module.exports = function (MIPS, MipsModule) {
     MipsModule.opcodes[0b000010] = { // J (aka JMP)
         type: 'J',
         execute: function(instr) {
-            this.specialRegisters.PC = (this.specialRegisters.PC & 0xFC000000) | (instr.addr << 2) - 4;
+            this.specialRegisters.PC = (this.specialRegisters.PC & 0xFC000000) | (instr.addr << 2);
+            console.log(instr.addr, this.specialRegisters.PC);
         }
     };
 
@@ -648,8 +657,10 @@ module.exports = function (MIPS, MipsModule) {
         if ((opcdesc = MipsModule.opcodes[opcode]) === undefined)
             MipsModule.handleException.bind(this)(causes.IBUS, instruction);
 
-        let buf = Buffer.alloc(4);
-        buf.writeUInt32BE(instruction);
-        opcdesc.execute.bind(this)(MipsModule.formats[opcdesc.type].decode(buf));
+        else {
+            let buf = Buffer.alloc(4);
+            buf.writeUInt32BE(instruction);
+            opcdesc.execute.bind(this)(MipsModule.formats[opcdesc.type].decode(buf));
+        }
     };
 };

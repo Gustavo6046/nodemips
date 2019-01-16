@@ -1,7 +1,7 @@
 {
   "name": "nodemips",
   "version": "0.1.0",
-  "description": "MIPS data emulation and manipulation within Node.JS",
+  "description": "MIPS assembler, emulation, and data manipulation within Node.JS.",
   "main": "index.js",
   "keywords": [
     "mips",
@@ -24,6 +24,7 @@
     "build": "browserify -r ./index.js:mips | babel --minified -f minif.tmp | uglifyjs >browser/mips.js"
   },
   "dependencies": {
+    "jimp": "^0.6.0",
     "long": "^4.0.0"
   }
 }
