@@ -90,7 +90,7 @@ module.exports = function (MIPS, MipsModule) {
 
                     try {
                         for (let i = 0; i < 0xFA00 /* 320 * 200 */; i++) {
-                            img.setPixelColor(this.getPalette(this.VRAM.readUInt8LE(i)), i % 320, Math.floor(i / 320));
+                            img.setPixelColor((this.getPalette(this.VRAM.readUInt8LE(i)), i % 320, Math.floor(i / 320) << 8) | 0xFF);
                         }
 
                         callback(img);
@@ -363,6 +363,27 @@ module.exports = function (MIPS, MipsModule) {
 
                 this.on('stdin', fn);
             }
+        },
+
+        'syscall 60': function (argObj) { // set VGA palette color
+            let index = (argObj.a0 & 0xFF) * 3;
+            let r = argObj.a1 & 0xFF;
+            let g = argObj.a2 & 0xFF;
+            let b = argObj.a3 & 0xFF;
+
+            this.palette.writeUInt8(index, r);
+            this.palette.writeUInt8(index + 1, g);
+            this.palette.writeUInt8(index + 2, b);
+        },
+
+        'syscall 30': function () { /* set a0 (high) and a1 (low) to the system Unix time;
+                                     * milliseconds passed since 1 January 1970.
+                                     */
+            let high = Math.floor(Date.now() / 4294967296);
+            let low = Date.now() >>> 0;
+
+            this.registers.set(4, high);
+            this.registers.set(5, low);
         },
 
         'syscall 8': function (argObj) { // read string

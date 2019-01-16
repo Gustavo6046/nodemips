@@ -1,13 +1,15 @@
 const MIPS = require('./index.js');
 const fs = require('fs');
 const machine = new MIPS.machine.MIPSMachine();
-const numClocks = 2000;
+const numClocks = 50000;
 
 function printDebugStatus() {
+    /*
     console.log('Registers:', JSON.stringify(machine.registers._internal));
     console.log('Special Registers:', JSON.stringify(machine.specialRegisters));
     console.log('Error mode:', machine.errorInstructions);
     console.log();
+    */
 }
 
 let assembler = MIPS.assembler.assembler();
@@ -39,6 +41,7 @@ machine.on('stdout', (data) => {
 MIPS.machine.defaultSyscalls.apply(machine);
 
 for (let clock = 1; clock <= numClocks; clock++) {
+    /*
     let instruction;
 
     if (this.errorInstructions)
@@ -63,9 +66,10 @@ for (let clock = 1; clock <= numClocks; clock++) {
         
         console.log(`> Instruction (guessed fmt: ${opcdesc.type}): ${JSON.stringify(inst2)}`);
     }
+    */
 
     machine.clock();
-    printDebugStatus();
+    // printDebugStatus();
 
     if (machine.stopped)
         break;

@@ -1,6 +1,6 @@
 {
   "name": "nodemips",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MIPS assembler, emulation, and data manipulation within Node.JS.",
   "main": "index.js",
   "keywords": [
@@ -9,7 +9,14 @@
     "computer",
     "emulator",
     "emulation",
-    "manipulation"
+    "manipulation",
+    "assembler",
+    "assembly",
+    "assembling",
+    "mips i",
+    "architecture",
+    "processor",
+    "syscall"
   ],
   "devDependencies": {
     "@babel/cli": "^7.1.5",
