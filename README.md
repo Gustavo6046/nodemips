@@ -10,6 +10,15 @@ Library API documentation is yet to come. To run the simple test pogram
 (`test.asm`), which is a demonstration that comes with `nodemips`,
 simply run `test.js` (or `nodemips-demo` if globally installed via npm).
 
+Usually, nodemips has a browser version, inside the `browser` folder.
+If you want to rebuild that version, please note that, in order to
+run Browserify (`npm run build`), there must be **no** `browser` field
+in the `package.json` file of the `jimp` dependency. Apparently, Browserify
+uses `jimp`'s own browser version, the latter which requires many files
+that don't exist.
+
+This currently must be done manually, but only once per nodemips update.
+
 ## Key Aspects
 
 ### Performance
